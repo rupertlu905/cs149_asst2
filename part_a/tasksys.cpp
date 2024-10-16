@@ -1,3 +1,6 @@
+#include <cstdio>
+
+#include "CycleTimer.h"
 #include "tasksys.h"
 
 IRunnable::~IRunnable() {}
@@ -65,20 +68,17 @@ TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {
 }
 
 void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
-    // Create a thread for each task
-    // num_total_tasks can be larger than num_threads
-    int remaining_tasks = num_total_tasks;
-    while (remaining_tasks > 0) {
-        for (int i = 0; i < num_threads; i++) {
-            if (remaining_tasks == 0) {
-                break;
-            }
-            thread_pool[i] = std::thread(&IRunnable::runTask, runnable, num_total_tasks - remaining_tasks, num_total_tasks);
-            remaining_tasks--;
-        }
-        for (int i = 0; i < num_threads; i++) {
-            thread_pool[i].join();
-        }
+    for (int i = 0; i < num_threads; i++) {
+        thread_pool[i] = std::thread(&TaskSystemParallelSpawn::runInBulk, this, runnable, num_total_tasks, i);
+    }
+    for (int i = 0; i < num_threads; i++) {
+        thread_pool[i].join();
+    }
+}
+
+void TaskSystemParallelSpawn::runInBulk(IRunnable* runnable, int num_total_tasks, int threadId) {
+    for (int i = threadId; i < num_total_tasks; i += num_threads) {
+        runnable->runTask(i, num_total_tasks);
     }
 }
 
