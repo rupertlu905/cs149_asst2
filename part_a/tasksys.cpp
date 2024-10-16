@@ -104,27 +104,44 @@ const char* TaskSystemParallelThreadPoolSpinning::name() {
 }
 
 TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads): ITaskSystem(num_threads) {
-    //
-    // TODO: CS149 student implementations may decide to perform setup
-    // operations (such as thread pool construction) here.
-    // Implementations are free to add new class member variables
-    // (requiring changes to tasksys.h).
-    //
+    this->num_threads = num_threads;
+    thread_pool = new std::thread[num_threads];
+    task_done = true;
+    for (int i = 0; i < num_threads; i++) {
+        thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSpinning::runInBulk, this);
+    }
 }
 
-TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {}
+TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
+    for (int i = 0; i < num_threads; i++) {
+        if (thread_pool[i].joinable()) {
+            thread_pool[i].join();
+        }
+    }
+    delete [] thread_pool;
+}
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
+    task_counter.store(0);
+    this->runnable = runnable;
+    this->num_total_tasks = num_total_tasks;
+    task_done.store(false);
+    while (!task_done.load()) {}
+    // barrier
+}
 
+void TaskSystemParallelThreadPoolSpinning::runInBulk() {
+    while (true) {
+        while (task_done.load()) {}
 
-    //
-    // TODO: CS149 students will modify the implementation of this
-    // method in Part A.  The implementation provided below runs all
-    // tasks sequentially on the calling thread.
-    //
+        int task_id = task_counter.fetch_add(1);
 
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+        if (task_id >= num_total_tasks) {
+            task_done.store(true);
+            // barrier
+        } else {
+            runnable->runTask(task_id, num_total_tasks);
+        }
     }
 }
 
