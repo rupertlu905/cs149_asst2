@@ -51,34 +51,34 @@ const char* TaskSystemParallelSpawn::name() {
 }
 
 TaskSystemParallelSpawn::TaskSystemParallelSpawn(int num_threads): ITaskSystem(num_threads) {
-    //
-    // TODO: CS149 student implementations may decide to perform setup
-    // operations (such as thread pool construction) here.
-    // Implementations are free to add new class member variables
-    // (requiring changes to tasksys.h).
-    //
-    
-    // Create a thread pool with num_threads threads
     this->num_threads = num_threads;
-    thread_pool = new std::thread[num_threads];
+    worker_threads = new std::thread[num_threads];
 }
 
 TaskSystemParallelSpawn::~TaskSystemParallelSpawn() {
-    delete [] thread_pool;
+    delete [] worker_threads;
 }
 
 void TaskSystemParallelSpawn::run(IRunnable* runnable, int num_total_tasks) {
+    task_counter = 0;
     for (int i = 0; i < num_threads; i++) {
-        thread_pool[i] = std::thread(&TaskSystemParallelSpawn::runInBulk, this, runnable, num_total_tasks, i);
+        worker_threads[i] = std::thread(&TaskSystemParallelSpawn::runInBulk, this, runnable, num_total_tasks);
     }
     for (int i = 0; i < num_threads; i++) {
-        thread_pool[i].join();
+        worker_threads[i].join();
     }
 }
 
-void TaskSystemParallelSpawn::runInBulk(IRunnable* runnable, int num_total_tasks, int threadId) {
-    for (int i = threadId; i < num_total_tasks; i += num_threads) {
-        runnable->runTask(i, num_total_tasks);
+void TaskSystemParallelSpawn::runInBulk(IRunnable* runnable, int num_total_tasks) {
+    while (true) {
+        int task_id = task_counter.fetch_add(1);
+
+        // putting this check here instead of in loop condition prevents race conditions
+        if (task_id >= num_total_tasks) {
+            break;
+        }
+
+        runnable->runTask(task_id, num_total_tasks);
     }
 }
 

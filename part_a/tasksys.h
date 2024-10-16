@@ -2,6 +2,7 @@
 #define _TASKSYS_H
 
 #include "itasksys.h"
+#include <atomic>
 #include <thread>
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -28,13 +29,14 @@ class TaskSystemSerial: public ITaskSystem {
 class TaskSystemParallelSpawn: public ITaskSystem {
     private:
         int num_threads;
-        std::thread *thread_pool;
+        std::thread *worker_threads;
+        std::atomic<int> task_counter;
     public:
         TaskSystemParallelSpawn(int num_threads);
         ~TaskSystemParallelSpawn();
         const char* name();
         void run(IRunnable* runnable, int num_total_tasks);
-        void runInBulk(IRunnable* runnable, int num_total_tasks, int threadId);
+        void runInBulk(IRunnable* runnable, int num_total_tasks);
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
