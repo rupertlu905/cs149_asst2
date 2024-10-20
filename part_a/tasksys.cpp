@@ -106,71 +106,57 @@ const char* TaskSystemParallelThreadPoolSpinning::name() {
 TaskSystemParallelThreadPoolSpinning::TaskSystemParallelThreadPoolSpinning(int num_threads): ITaskSystem(num_threads) {
     this->num_threads = num_threads;
     thread_pool = new std::thread[num_threads];
-    task_ready = false;
-    task_counter = 0;
-    terminate = false;
-    first_run = new bool[num_threads];
+    num_total_tasks = 0;
+    terminate.store(false);
     for (int i = 0; i < num_threads; i++) {
-        first_run[i] = false;
         thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSpinning::runInBulk, this, i);
     }
 }
 
 TaskSystemParallelThreadPoolSpinning::~TaskSystemParallelThreadPoolSpinning() {
     terminate.store(true);
-    for (int i = 0; i < num_threads; i++) {
+    for (int i = 0; i < num_threads ; i++) {
         if (thread_pool[i].joinable()) {
             thread_pool[i].join();
         }
     }
-    delete [] first_run;
     delete [] thread_pool;
 }
 
-void TaskSystemParallelThreadPoolSpinning::runInBulk(int thread_id) {
-    bool reached_barrier = true;
-    while (!terminate.load()) {
-        while (true) {
-            std::unique_lock<std::mutex> lock(mtx);
-            if (first_run[thread_id]) {break;}
-            if (task_ready.load()) {break;}
-            lock.unlock();
-            if (!reached_barrier) {break;}
-            if (terminate.load()) break;
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(mtx);
-            first_run[thread_id] = false;
-        }
-
-        reached_barrier = false;
-        int task_id = task_counter.fetch_add(1);
-
-        if (task_id >= num_total_tasks) {
-            std::unique_lock<std::mutex> lock(mtx);
-            task_ready.store(false);
-            reached_barrier = true;
-            num_threads_reached_barrier.fetch_add(1);
-            lock.unlock();
-        } else {
-            runnable->runTask(task_id, num_total_tasks);
+void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
+    this->runnable = runnable;    
+    task_completed.store(0);  // Initialize task completed counter
+    task_counter.store(0);  // Initialize task counter
+    this->num_total_tasks = num_total_tasks;
+    while (true) {
+        int num_completed_tasks = task_completed.load();  // Atomically fetch the completed task counter
+        if (num_completed_tasks == num_total_tasks) {
+            break;  // Exit the loop if all tasks are completed
         }
     }
+    this->num_total_tasks = 0;  // Reset the task counter
 }
 
-void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
-    std::unique_lock<std::mutex> lock(mtx);
-    task_counter.store(0);
-    num_threads_reached_barrier.store(0);
-    this->runnable = runnable;
-    this->num_total_tasks = num_total_tasks;
-    task_ready.store(true);
-    for (int i = 0; i < num_threads; i++) {
-        first_run[i] = true;
+void TaskSystemParallelThreadPoolSpinning::runInBulk(int thread_id) {
+    int task_id = 0;
+    while (true) {
+        while (num_total_tasks == 0 || task_counter.load() >= num_total_tasks) {
+            // Busy wait until the task system is initialized
+            if (terminate.load()) {
+                break;
+            }
+        }
+        if (terminate.load()) {
+            break;
+        }
+        task_id = task_counter.fetch_add(1);  // Atomically fetch and increment
+        if (task_id >= num_total_tasks) {
+            continue;  // intentionally busy wait in the loop if there are no more tasks
+        } else {
+            runnable->runTask(task_id, num_total_tasks);  // Execute the task
+            task_completed.fetch_add(1);  // Atomically increment the completed task counter
+        }
     }
-    lock.unlock();
-    while (num_threads_reached_barrier.load() != num_threads) {}
 }
 
 TaskID TaskSystemParallelThreadPoolSpinning::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
