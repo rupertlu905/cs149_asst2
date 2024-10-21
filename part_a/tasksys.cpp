@@ -181,34 +181,60 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
 }
 
 TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads) {
-    //
-    // TODO: CS149 student implementations may decide to perform setup
-    // operations (such as thread pool construction) here.
-    // Implementations are free to add new class member variables
-    // (requiring changes to tasksys.h).
-    //
+    this->num_threads = num_threads;
+    thread_pool = new std::thread[num_threads];
+    num_total_tasks = 0;
+    terminate.store(false);
+    for (int i = 0; i < num_threads; i++) {
+        thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSleeping::runInBulk, this, i);
+    }
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
-    //
-    // TODO: CS149 student implementations may decide to perform cleanup
-    // operations (such as thread pool shutdown construction) here.
-    // Implementations are free to add new class member variables
-    // (requiring changes to tasksys.h).
-    //
+    terminate.store(true);
+    cv.notify_all();
+    for (int i = 0; i < num_threads ; i++) {
+        if (thread_pool[i].joinable()) {
+            thread_pool[i].join();
+        }
+    }
+    delete [] thread_pool;
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
+    this->runnable = runnable;    
+    task_completed.store(0);  // Initialize task completed counter
+    task_counter.store(0);  // Initialize task counter
+    this->num_total_tasks = num_total_tasks;
+    cv.notify_all();
 
+    // use condition variable to sleep
+    std::unique_lock<std::mutex> lock(mtx);
+    while (task_completed.load() < num_total_tasks) {
+        cv.wait(lock);
+    }
+    this->num_total_tasks = 0;  // Reset the task counter
+}
 
-    //
-    // TODO: CS149 students will modify the implementation of this
-    // method in Parts A and B.  The implementation provided below runs all
-    // tasks sequentially on the calling thread.
-    //
-
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+void TaskSystemParallelThreadPoolSleeping::runInBulk(int thread_id) {
+    int task_id = 0;
+    while (true) {
+        // use condition variable to sleep
+        std::unique_lock<std::mutex> lock(mtx);
+        cv.wait(lock, [this] { return (num_total_tasks != 0 && task_counter.load() < num_total_tasks) || terminate.load(); });
+        lock.unlock();
+        if (terminate.load()) {
+            break;
+        }
+        task_id = task_counter.fetch_add(1);  // Atomically fetch and increment
+        if (task_id >= num_total_tasks) {
+            continue;  // intentionally busy wait in the loop if there are no more tasks
+        } else {
+            runnable->runTask(task_id, num_total_tasks);  // Execute the task
+            if (task_completed.fetch_add(1) == num_total_tasks - 1) {
+                cv.notify_all();
+            }
+        }
     }
 }
 

@@ -5,6 +5,8 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
+
 /*
  * TaskSystemSerial: This class is the student's implementation of a
  * serial task execution engine.  See definition of ITaskSystem in
@@ -32,12 +34,12 @@ class TaskSystemParallelSpawn: public ITaskSystem {
         int num_threads;
         std::thread *worker_threads;
         std::atomic<int> task_counter;
+        void runInBulk(IRunnable* runnable, int num_total_tasks);
     public:
         TaskSystemParallelSpawn(int num_threads);
         ~TaskSystemParallelSpawn();
         const char* name();
         void run(IRunnable* runnable, int num_total_tasks);
-        void runInBulk(IRunnable* runnable, int num_total_tasks);
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
@@ -58,13 +60,12 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         std::atomic<bool> terminate;
         IRunnable *runnable;
         int num_total_tasks;
-
+        void runInBulk(int thread_id);
     public:
         TaskSystemParallelThreadPoolSpinning(int num_threads);
         ~TaskSystemParallelThreadPoolSpinning();
         const char* name();
         void run(IRunnable* runnable, int num_total_tasks);
-        void runInBulk(int thread_id);
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
@@ -77,6 +78,18 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
  * itasksys.h for documentation of the ITaskSystem interface.
  */
 class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
+    private:
+        int num_threads;
+        std::thread *thread_pool;
+        std::atomic<int> task_counter;
+        std::atomic<int> task_completed; 
+        std::atomic<bool> terminate;
+        IRunnable *runnable;
+        int num_total_tasks;
+        void runInBulk(int thread_id);
+        std::mutex mtx;  // Mutex for critical section
+        std::condition_variable cv;  // Condition variable for synchronization
+
     public:
         TaskSystemParallelThreadPoolSleeping(int num_threads);
         ~TaskSystemParallelThreadPoolSleeping();
