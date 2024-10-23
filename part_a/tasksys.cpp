@@ -180,9 +180,11 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
 }
 
 TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads) {
+    std::unique_lock<std::mutex> lock(mtx);
     this->num_threads = num_threads;
     thread_pool = new std::thread[num_threads];
     num_total_tasks = 0;
+    task_counter.store(0);
     terminate.store(false);
     for (int i = 0; i < num_threads; i++) {
         thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSleeping::runInBulk, this);
@@ -190,8 +192,10 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
+    std::unique_lock<std::mutex> lock(mtx);
     terminate.store(true);
     cv.notify_all();
+    lock.unlock();
     for (int i = 0; i < num_threads ; i++) {
         if (thread_pool[i].joinable()) {
             thread_pool[i].join();
@@ -211,14 +215,13 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
     while (task_completed.load() < num_total_tasks) {
         cv2.wait(lock);
     }
-    this->num_total_tasks = 0;
 }
 
 void TaskSystemParallelThreadPoolSleeping::runInBulk() {
     while (true) {
         {
             std::unique_lock<std::mutex> lock(mtx);
-            cv.wait(lock, [this] { return (num_total_tasks != 0 && task_counter.load() < num_total_tasks) || terminate.load(); });
+            cv.wait(lock, [this] { return task_counter.load() < num_total_tasks || terminate.load(); });
         }
         if (terminate.load()) {
             return;
