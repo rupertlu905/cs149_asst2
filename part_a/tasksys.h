@@ -57,10 +57,11 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
         std::thread *thread_pool;
         std::atomic<int> task_counter;
         std::atomic<int> task_completed; 
-        std::atomic<bool> terminate;
+        bool terminate;
         IRunnable *runnable;
         int num_total_tasks;
-        void runInBulk(int thread_id);
+        void runInBulk();
+        std::mutex mtx; 
     public:
         TaskSystemParallelThreadPoolSpinning(int num_threads);
         ~TaskSystemParallelThreadPoolSpinning();
@@ -86,9 +87,10 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::atomic<bool> terminate;
         IRunnable *runnable;
         int num_total_tasks;
-        void runInBulk(int thread_id);
-        std::mutex mtx;  // Mutex for critical section
-        std::condition_variable cv;  // Condition variable for synchronization
+        void runInBulk();
+        std::mutex mtx;
+        std::condition_variable cv;
+        std::condition_variable cv2;
 
     public:
         TaskSystemParallelThreadPoolSleeping(int num_threads);
