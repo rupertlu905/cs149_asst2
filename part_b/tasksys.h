@@ -2,6 +2,17 @@
 #define _TASKSYS_H
 
 #include "itasksys.h"
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <stack>
+
+struct Launch {
+    IRunnable* runnable;
+    int num_total_tasks;
+    const std::vector<TaskID>& deps;
+};
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -60,6 +71,22 @@ class TaskSystemParallelThreadPoolSpinning: public ITaskSystem {
  * itasksys.h for documentation of the ITaskSystem interface.
  */
 class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
+    private:
+        int num_threads;
+        int num_launches;
+        std::vector<Launch*> launches;
+        std::vector<std::vector<TaskID>> children;
+        std::vector<bool> visited;
+        std::stack<TaskID> sorted_launches;
+        void topologicalSort(TaskID launch_id);
+        std::thread *thread_pool;
+        std::vector<int> task_counters;
+        std::vector<int> task_completed;
+        std::vector<TaskID> working_launches;
+        std::mutex mtx;
+        std::condition_variable cv;
+        void runInBulk();
+
     public:
         TaskSystemParallelThreadPoolSleeping(int num_threads);
         ~TaskSystemParallelThreadPoolSleeping();

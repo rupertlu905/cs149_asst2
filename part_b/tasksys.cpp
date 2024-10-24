@@ -1,4 +1,5 @@
 #include "tasksys.h"
+#include "cstdio"
 
 
 IRunnable::~IRunnable() {}
@@ -127,57 +128,114 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
 }
 
 TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads) {
-    //
-    // TODO: CS149 student implementations may decide to perform setup
-    // operations (such as thread pool construction) here.
-    // Implementations are free to add new class member variables
-    // (requiring changes to tasksys.h).
-    //
+    num_launches = 0;
+    std::unique_lock<std::mutex> lock(mtx);
+    this->num_threads = num_threads;
+    thread_pool = new std::thread[num_threads];
+    for (int i = 0; i < num_threads; i++) {
+        thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSleeping::runInBulk, this);
+    }
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
-    //
-    // TODO: CS149 student implementations may decide to perform cleanup
-    // operations (such as thread pool shutdown construction) here.
-    // Implementations are free to add new class member variables
-    // (requiring changes to tasksys.h).
-    //
+    for (Launch* launch : launches) {
+        delete launch;
+    }
+}
+
+void TaskSystemParallelThreadPoolSleeping::topologicalSort(TaskID launch_id) {
+    if (visited[launch_id]) {
+        return;
+    }
+
+    visited[launch_id] = true;
+    for (TaskID child : children[launch_id]) {
+        topologicalSort(child);
+    }
+
+    sorted_launches.push(launch_id);
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
-
-
-    //
-    // TODO: CS149 students will modify the implementation of this
-    // method in Parts A and B.  The implementation provided below runs all
-    // tasks sequentially on the calling thread.
-    //
-
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
-    }
+    
 }
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                                     const std::vector<TaskID>& deps) {
-
-
-    //
-    // TODO: CS149 students will implement this method in Part B.
-    //
-
-    for (int i = 0; i < num_total_tasks; i++) {
-        runnable->runTask(i, num_total_tasks);
+    task_counters.push_back(0);
+    task_completed.push_back(0);
+    printf("Constructing graph with launch id: %d\n", num_launches);
+    launches.push_back(new Launch{runnable, num_total_tasks, deps});
+    visited.push_back(false);
+    children.push_back(std::vector<TaskID>());
+    for (TaskID dep : deps) {
+        printf("Adding child %d to launch %d\n", dep, num_launches);
+        children[dep].push_back(num_launches);
     }
-
-    return 0;
+    printf("Finished constructing graph with launch id: %d\n", num_launches);
+    return num_launches++;
 }
 
 void TaskSystemParallelThreadPoolSleeping::sync() {
-
-    //
-    // TODO: CS149 students will modify the implementation of this method in Part B.
-    //
+    for (TaskID i = 0; i < num_launches; i++) {
+        topologicalSort(i);
+    }
+    // print sorted_launches
+    printf("----------Sorted launches----------\n");
+    while (!sorted_launches.empty()) {
+        TaskID launch_id = sorted_launches.top();
+        printf("[Info] Launch ID: %d\n", launch_id);
+        Launch *launch = launches[launch_id];
+        printf("[Info] Number of tasks: %d\n", launch->num_total_tasks);
+        printf("[Info] Dependencies: ");
+        for (TaskID dep : launch->deps) {
+            printf("%d ", dep);
+        }
+        printf("\n\n");
+        sorted_launches.pop();
+    }
 
     return;
+}
+
+void TaskSystemParallelThreadPoolSleeping::runInBulk() {
+    while (true) {
+        // cv from sync to start
+        // add termination flag
+
+        std::unique_lock<std::mutex> lock(mtx);
+        if (!working_launches.empty()) {
+            TaskID launchID = working_launches[0];
+            Launch *launch = launches[launchID];
+            int task_counter = task_counters[launchID];
+            task_counters[launchID]++;
+            int num_total_tasks = launch->num_total_tasks;
+            IRunnable *runnable = launch->runnable;
+            if (task_counter < num_total_tasks) {
+                lock.unlock();
+                runnable->runTask(task_counter, num_total_tasks);
+                lock.lock();
+                task_completed[launchID]++;
+            } else {
+                // remove the specific launchID in working_launches
+                working_launches.erase(std::remove(working_launches.begin(), working_launches.end(), launchID), working_launches.end());
+            }
+
+        } else {
+            int new_launch_id = sorted_launches.top();
+            bool ready = true;
+            for (TaskID dep : launches[new_launch_id]->deps) {
+                if (task_completed[dep] != launches[dep]->num_total_tasks) {
+                    ready = false;
+                    break;
+                }
+            }
+            if (ready) {
+                working_launches.push_back(new_launch_id);
+                sorted_launches.pop();
+            } else {
+                cv.wait(lock);
+            }
+        }
+    }
 }
