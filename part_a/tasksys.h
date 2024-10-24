@@ -84,7 +84,7 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::thread *thread_pool;
         std::atomic<int> task_counter;
         std::atomic<int> task_completed; 
-        std::atomic<bool> terminate;
+        bool terminate;
         IRunnable *runnable;
         int num_total_tasks;
         void runInBulk();

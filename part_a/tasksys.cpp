@@ -185,7 +185,7 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     thread_pool = new std::thread[num_threads];
     num_total_tasks = 0;
     task_counter.store(0);
-    terminate.store(false);
+    terminate = false;
     for (int i = 0; i < num_threads; i++) {
         thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSleeping::runInBulk, this);
     }
@@ -193,7 +193,7 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     std::unique_lock<std::mutex> lock(mtx);
-    terminate.store(true);
+    terminate = true;
     cv.notify_all();
     lock.unlock();
     for (int i = 0; i < num_threads ; i++) {
@@ -205,13 +205,17 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
-    std::unique_lock<std::mutex> lock(mtx);
-    this->runnable = runnable;    
-    task_completed.store(0);
-    task_counter.store(0);
-    this->num_total_tasks = num_total_tasks;
+    {
+        std::unique_lock<std::mutex> lock(mtx);
+        this->runnable = runnable;    
+        task_completed.store(0);
+        task_counter.store(0);
+        this->num_total_tasks = num_total_tasks;
+    }
+    
     cv.notify_all();
 
+    std::unique_lock<std::mutex> lock(mtx);
     while (task_completed.load() < num_total_tasks) {
         cv2.wait(lock);
     }
@@ -221,10 +225,8 @@ void TaskSystemParallelThreadPoolSleeping::runInBulk() {
     while (true) {
         {
             std::unique_lock<std::mutex> lock(mtx);
-            cv.wait(lock, [this] { return task_counter.load() < num_total_tasks || terminate.load(); });
-        }
-        if (terminate.load()) {
-            return;
+            cv.wait(lock, [this] { return task_counter.load() < num_total_tasks || terminate; });
+            if (terminate) return;
         }
         int task_id = task_counter.fetch_add(1);
         if (task_id < num_total_tasks) {
