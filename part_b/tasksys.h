@@ -11,8 +11,12 @@
 struct Launch {
     IRunnable* runnable;
     int num_total_tasks;
-    const std::vector<TaskID>& deps;
+    std::vector<TaskID> deps;
+
+    Launch(IRunnable* r, int num_tasks, std::vector<TaskID> d)
+        : runnable(r), num_total_tasks(num_tasks), deps(std::move(d)) {}
 };
+
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -74,6 +78,9 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
     private:
         int num_threads;
         int num_launches;
+        int num_total_launches;
+        int launch_completed;
+        bool terminate;
         std::vector<Launch*> launches;
         std::vector<std::vector<TaskID>> children;
         std::vector<bool> visited;
@@ -82,9 +89,11 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::thread *thread_pool;
         std::vector<int> task_counters;
         std::vector<int> task_completed;
-        std::vector<TaskID> working_launches;
+        TaskID working_launch;
         std::mutex mtx;
         std::condition_variable cv;
+        std::condition_variable cv2;
+        std::condition_variable cv3;
         void runInBulk();
 
     public:

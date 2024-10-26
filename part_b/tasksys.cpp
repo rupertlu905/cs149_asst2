@@ -129,6 +129,8 @@ const char* TaskSystemParallelThreadPoolSleeping::name() {
 
 TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads) {
     num_launches = 0;
+    num_total_launches = 0;
+    terminate = false;
     std::unique_lock<std::mutex> lock(mtx);
     this->num_threads = num_threads;
     thread_pool = new std::thread[num_threads];
@@ -138,8 +140,12 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
 }
 
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
-    for (Launch* launch : launches) {
-        delete launch;
+    std::unique_lock<std::mutex> lock(mtx);
+    terminate = true;
+    cv.notify_all();
+    lock.unlock();
+    for (int i = 0; i < num_threads; i++) {
+        thread_pool[i].join();
     }
 }
 
@@ -157,22 +163,21 @@ void TaskSystemParallelThreadPoolSleeping::topologicalSort(TaskID launch_id) {
 }
 
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
-    
+    runAsyncWithDeps(runnable, num_total_tasks, std::vector<TaskID>());
+    sync();
 }
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                                     const std::vector<TaskID>& deps) {
     task_counters.push_back(0);
     task_completed.push_back(0);
-    printf("Constructing graph with launch id: %d\n", num_launches);
     launches.push_back(new Launch{runnable, num_total_tasks, deps});
+
     visited.push_back(false);
     children.push_back(std::vector<TaskID>());
     for (TaskID dep : deps) {
-        printf("Adding child %d to launch %d\n", dep, num_launches);
         children[dep].push_back(num_launches);
     }
-    printf("Finished constructing graph with launch id: %d\n", num_launches);
     return num_launches++;
 }
 
@@ -180,45 +185,78 @@ void TaskSystemParallelThreadPoolSleeping::sync() {
     for (TaskID i = 0; i < num_launches; i++) {
         topologicalSort(i);
     }
-    // print sorted_launches
-    printf("----------Sorted launches----------\n");
-    while (!sorted_launches.empty()) {
-        TaskID launch_id = sorted_launches.top();
-        printf("[Info] Launch ID: %d\n", launch_id);
-        Launch *launch = launches[launch_id];
-        printf("[Info] Number of tasks: %d\n", launch->num_total_tasks);
-        printf("[Info] Dependencies: ");
-        for (TaskID dep : launch->deps) {
-            printf("%d ", dep);
-        }
-        printf("\n\n");
-        sorted_launches.pop();
+    working_launch = -1;
+    launch_completed = 0;
+    num_total_launches = num_launches;
+    // {
+    //     std::unique_lock<std::mutex> lock(mtx);
+    //     printf("----------Sorted launches----------\n");
+    //     while (!sorted_launches.empty()) {
+    //         TaskID launch_id = sorted_launches.top();
+    //         printf("[Info] Launch ID: %d\n", launch_id);
+    //         Launch *launch = launches[launch_id];
+    //         printf("[Info] Number of tasks: %d\n", launch->num_total_tasks);
+    //         printf("[Info] Dependencies: ");
+    //         for (TaskID dep : launch->deps) {
+    //             printf("%d ", dep);
+    //         }
+    //         printf("\n\n");
+    //         sorted_launches.pop();
+    //     }
+    //     printf("----------End of sorted launches----------\n");
+    // }
+    cv.notify_all();
+
+    std::unique_lock<std::mutex> lock(mtx);
+    while (launch_completed < num_launches) {
+        cv2.wait(lock);
     }
+    num_total_launches = 0;
+
+    // clean up the resources
+    for (Launch *launch : launches) {
+        delete launch;
+    }
+    task_counters.clear();
+    task_completed.clear();
+    launches.clear();
+    visited.clear();
+    children.clear();
+    num_launches = 0;
 
     return;
 }
 
 void TaskSystemParallelThreadPoolSleeping::runInBulk() {
     while (true) {
-        // cv from sync to start
-        // add termination flag
-
         std::unique_lock<std::mutex> lock(mtx);
-        if (!working_launches.empty()) {
-            TaskID launchID = working_launches[0];
-            Launch *launch = launches[launchID];
-            int task_counter = task_counters[launchID];
-            task_counters[launchID]++;
+        while ((num_total_launches == 0 || (sorted_launches.empty() && working_launch == -1)) && !terminate) {
+            cv.wait(lock);
+        }
+        if (terminate) {
+            return;
+        }
+
+        if (working_launch != -1) {
+            int local_working_launch = working_launch;
+            Launch *launch = launches[local_working_launch];
+            int task_counter = task_counters[local_working_launch];
+            task_counters[local_working_launch]++;
             int num_total_tasks = launch->num_total_tasks;
             IRunnable *runnable = launch->runnable;
             if (task_counter < num_total_tasks) {
                 lock.unlock();
                 runnable->runTask(task_counter, num_total_tasks);
                 lock.lock();
-                task_completed[launchID]++;
+                task_completed[local_working_launch]++;
+                if (task_completed[local_working_launch] == num_total_tasks) {
+                    launch_completed++;
+                    if (launch_completed == num_launches) {
+                        cv2.notify_one();
+                    }
+                }
             } else {
-                // remove the specific launchID in working_launches
-                working_launches.erase(std::remove(working_launches.begin(), working_launches.end(), launchID), working_launches.end());
+                working_launch = -1;
             }
 
         } else {
@@ -231,10 +269,11 @@ void TaskSystemParallelThreadPoolSleeping::runInBulk() {
                 }
             }
             if (ready) {
-                working_launches.push_back(new_launch_id);
+                working_launch = new_launch_id;
                 sorted_launches.pop();
+                cv3.notify_all();
             } else {
-                cv.wait(lock);
+                cv3.wait(lock);
             }
         }
     }
