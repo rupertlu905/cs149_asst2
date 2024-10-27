@@ -62,30 +62,45 @@ typedef struct {
 */
 class YourTask : public IRunnable {
     public:
-        YourTask() {}
+        int* output;
+        YourTask(int* output) : output(output) {}
         ~YourTask() {}
-        void runTask(int task_id, int num_total_tasks) {}
+
+        static inline int random_big_computation(int n) {
+            if (n < 2) return 1;
+            return random_big_computation(n - 1) + random_big_computation(n - 2);
+        }
+
+        void runTask(int task_id, int num_total_tasks) {
+            *output = random_big_computation(20);
+        }
 };
 /*
  * Implement your test here. Call this function from a wrapper that passes in
  * do_async and num_elements. See `simpleTest`, `simpleTestSync`, and
  * `simpleTestAsync` as an example.
  */
-TestResults yourTest(ITaskSystem* t, bool do_async, int num_elements, int num_bulk_task_launches) {
+TestResults yourTestHelper(ITaskSystem* t, bool do_async) {
     // TODO: initialize your input and output buffers
-    int* output = new int[num_elements];
+    int num_bulk_task_launches = 100;
+    int* output = new int(0);
+    int num_tests = 1000;
 
     // TODO: instantiate your bulk task launches
+    YourTask task = YourTask(output);
 
     // Run the test
     double start_time = CycleTimer::currentSeconds();
-    if (do_async) {
-        // TODO:
-        // initialize dependency vector
-        // make calls to t->runAsyncWithDeps and push TaskID to dependency vector
-        // t->sync() at end
-    } else {
-        // TODO: make calls to t->run
+    for (int j = 0; j < num_tests; j++) {
+        if (do_async) {
+            std::vector<TaskID> deps;
+            for (int i = 0; i < num_bulk_task_launches; i++)
+                t->runAsyncWithDeps(&task, 1, deps);
+            t->sync();
+        } else {
+            for (int i = 0; i < num_bulk_task_launches; i++)
+                t->run(&task, 1);
+        }
     }
     double end_time = CycleTimer::currentSeconds();
 
@@ -93,24 +108,24 @@ TestResults yourTest(ITaskSystem* t, bool do_async, int num_elements, int num_bu
     TestResults results;
     results.passed = true;
 
-    for (int i=0; i<num_elements; i++) {
-        int value = 0; // TODO: initialize value
-        for (int j=0; j<num_bulk_task_launches; j++) {
-            // TODO: update value as expected
-        }
-
-        int expected = value;
-        if (output[i] != expected) {
-            results.passed = false;
-            printf("%d: %d expected=%d\n", i, output[i], expected);
-            break;
-        }
+    int expected = YourTask::random_big_computation(20);
+    if (*output != expected) {
+        results.passed = false;
+        printf("output: %d expected=%d\n", *output, expected);
     }
     results.time = end_time - start_time;
 
-    delete [] output;
+    delete output;
 
     return results;
+}
+
+TestResults yourTest(ITaskSystem* t) {
+    return yourTestHelper(t, false);
+}
+
+TestResults yourTestAsync(ITaskSystem* t) {
+    return yourTestHelper(t, true);
 }
 
 /*
