@@ -133,7 +133,9 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
     this->runnable = runnable;    
     task_completed.store(0);
     task_counter.store(0);
+    std::unique_lock<std::mutex> lock(mtx);
     this->num_total_tasks = num_total_tasks;
+    lock.unlock();
     while (true) {
         if (task_completed.load() == num_total_tasks) {
             break;
@@ -144,14 +146,17 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
 
 void TaskSystemParallelThreadPoolSpinning::runInBulk() {
     while (true) {
-        while (num_total_tasks == 0 || task_counter.load() >= num_total_tasks) {
-            std::unique_lock<std::mutex> lock(mtx);
+        std::unique_lock<std::mutex> lock(mtx);
+        if (num_total_tasks == 0 || task_counter.load() >= num_total_tasks) {
+            lock.unlock();
             if (terminate) {
                 return;
             }
+            continue;
         }
         int task_id = task_counter.fetch_add(1);
         if (task_id < num_total_tasks) {
+            lock.unlock();
             runnable->runTask(task_id, num_total_tasks);
             task_completed.fetch_add(1);
         }
