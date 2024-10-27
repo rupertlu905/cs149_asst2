@@ -8,13 +8,17 @@
 #include <atomic>
 #include <stack>
 
-struct Launch {
+class Launch {
+public:
     IRunnable* runnable;
     int num_total_tasks;
     std::vector<TaskID> deps;
+    int task_counter;
+    int task_completed;
+    std::mutex mtx;
 
-    Launch(IRunnable* r, int num_tasks, std::vector<TaskID> d)
-        : runnable(r), num_total_tasks(num_tasks), deps(std::move(d)) {}
+    Launch(IRunnable* r, int n, const std::vector<TaskID>& d)
+        : runnable(r), num_total_tasks(n), deps(d), task_counter(0), task_completed(0) {}
 };
 
 
@@ -87,14 +91,12 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         std::stack<TaskID> sorted_launches;
         void topologicalSort(TaskID launch_id);
         std::thread *thread_pool;
-        std::vector<int> task_counters;
-        std::vector<int> task_completed;
         TaskID working_launch;
         std::mutex mtx;
         std::condition_variable cv;
         std::condition_variable cv2;
         std::condition_variable cv3;
-        void runInBulk();
+        void runInBulk(int thread_id);
 
     public:
         TaskSystemParallelThreadPoolSleeping(int num_threads);

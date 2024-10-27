@@ -135,7 +135,7 @@ TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int n
     this->num_threads = num_threads;
     thread_pool = new std::thread[num_threads];
     for (int i = 0; i < num_threads; i++) {
-        thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSleeping::runInBulk, this);
+        thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSleeping::runInBulk, this, i);
     }
 }
 
@@ -169,8 +169,7 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
 
 TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                                     const std::vector<TaskID>& deps) {
-    task_counters.push_back(0);
-    task_completed.push_back(0);
+    std::unique_lock<std::mutex> lock(mtx);
     launches.push_back(new Launch{runnable, num_total_tasks, deps});
 
     visited.push_back(false);
@@ -182,43 +181,24 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
 }
 
 void TaskSystemParallelThreadPoolSleeping::sync() {
+    std::unique_lock<std::mutex> lock(mtx);
     for (TaskID i = 0; i < num_launches; i++) {
         topologicalSort(i);
     }
     working_launch = -1;
     launch_completed = 0;
     num_total_launches = num_launches;
-    // {
-    //     std::unique_lock<std::mutex> lock(mtx);
-    //     printf("----------Sorted launches----------\n");
-    //     while (!sorted_launches.empty()) {
-    //         TaskID launch_id = sorted_launches.top();
-    //         printf("[Info] Launch ID: %d\n", launch_id);
-    //         Launch *launch = launches[launch_id];
-    //         printf("[Info] Number of tasks: %d\n", launch->num_total_tasks);
-    //         printf("[Info] Dependencies: ");
-    //         for (TaskID dep : launch->deps) {
-    //             printf("%d ", dep);
-    //         }
-    //         printf("\n\n");
-    //         sorted_launches.pop();
-    //     }
-    //     printf("----------End of sorted launches----------\n");
-    // }
+    lock.unlock();
     cv.notify_all();
 
-    std::unique_lock<std::mutex> lock(mtx);
+    lock.lock();
     while (launch_completed < num_launches) {
         cv2.wait(lock);
     }
     num_total_launches = 0;
-
-    // clean up the resources
     for (Launch *launch : launches) {
         delete launch;
     }
-    task_counters.clear();
-    task_completed.clear();
     launches.clear();
     visited.clear();
     children.clear();
@@ -227,10 +207,10 @@ void TaskSystemParallelThreadPoolSleeping::sync() {
     return;
 }
 
-void TaskSystemParallelThreadPoolSleeping::runInBulk() {
+void TaskSystemParallelThreadPoolSleeping::runInBulk(int thread_id) {
     while (true) {
         std::unique_lock<std::mutex> lock(mtx);
-        while ((num_total_launches == 0 || (sorted_launches.empty() && working_launch == -1)) && !terminate) {
+        while (!terminate && (num_total_launches == 0 || (sorted_launches.empty() && working_launch == -1) || launch_completed == num_total_launches)) {
             cv.wait(lock);
         }
         if (terminate) {
@@ -240,16 +220,16 @@ void TaskSystemParallelThreadPoolSleeping::runInBulk() {
         if (working_launch != -1) {
             int local_working_launch = working_launch;
             Launch *launch = launches[local_working_launch];
-            int task_counter = task_counters[local_working_launch];
-            task_counters[local_working_launch]++;
+            int task_counter = launch->task_counter;
+            launch->task_counter++;
             int num_total_tasks = launch->num_total_tasks;
             IRunnable *runnable = launch->runnable;
             if (task_counter < num_total_tasks) {
                 lock.unlock();
                 runnable->runTask(task_counter, num_total_tasks);
                 lock.lock();
-                task_completed[local_working_launch]++;
-                if (task_completed[local_working_launch] == num_total_tasks) {
+                launch->task_completed++;
+                if (launch->task_completed == num_total_tasks) {
                     launch_completed++;
                     if (launch_completed == num_launches) {
                         cv2.notify_one();
@@ -262,8 +242,8 @@ void TaskSystemParallelThreadPoolSleeping::runInBulk() {
         } else {
             int new_launch_id = sorted_launches.top();
             bool ready = true;
-            for (TaskID dep : launches[new_launch_id]->deps) {
-                if (task_completed[dep] != launches[dep]->num_total_tasks) {
+            for (TaskID dep : launches[new_launch_id]->deps) { // reverse search can be faster
+                if (launches[dep]->task_completed != launches[dep]->num_total_tasks) {
                     ready = false;
                     break;
                 }
